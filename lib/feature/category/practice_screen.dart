@@ -1,10 +1,13 @@
+// ignore_for_file: avoid_print
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:sargam_app/services/audio_service.dart';
 import 'package:sargam_app/services/audio_analysis_service.dart';
 import 'package:sargam_app/services/app_state_service.dart';
-import 'package:sargam_app/services/ai_analysis_service.dart';
+import 'package:sargam_app/services/normalized_compare.dart';
+import 'package:sargam_app/services/sa_pitch.dart';
 
 import '../../models/audio_feedback.dart';
 import '../../models/audio_characteristics.dart';
@@ -12,12 +15,10 @@ import '../../models/raag_entry.dart';
 import '../../models/practice_session.dart';
 import '../../models/journal_entry.dart';
 import '../../models/alankar.dart';
-import '../../models/ai_feedback_result.dart';
 import '../../services/tone_synth_service.dart';
 import '../../services/realtime_audio_service.dart';
-import '../../widgets/sing_along_graph.dart';
-import '../../widgets/user_voice_waveform.dart';
 import '../../widgets/pitch_graph.dart';
+import '../profile/sa_calibration_screen.dart';
 import 'real_time_audio_analysis.dart';
 import 'audio_characteristics_display.dart';
 
@@ -56,8 +57,9 @@ class _PracticeScreenState extends State<PracticeScreen>
   bool _isAnalyzing = false;
   AudioFeedback? _lastFeedback;
   AudioCharacteristics? _referenceCharacteristics;
+  bool _usedReferenceFallback = false;
   AudioCharacteristics? _userCharacteristics;
-  bool _showRealTimeAnalysis = false;
+  final bool _showRealTimeAnalysis = false;
   bool _showCharacteristicsDisplay = false;
   String? _recordedAudioPath;
   bool _hasRecording = false;
@@ -68,10 +70,6 @@ class _PracticeScreenState extends State<PracticeScreen>
   TargetTrack? _targetTrack;
   bool _showSingAlong = false;
 
-  int _selectedAnalysisTab = 0; // 0 for Algorithmic, 1 for AI
-  AIFeedbackResult? _aiFeedback;
-  bool _isFetchingAIFeedback = false;
-  String? _aiFeedbackError;
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -90,11 +88,19 @@ class _PracticeScreenState extends State<PracticeScreen>
     _analysisService.initialize();
     _realtimeAudio.initialize();
     _requestPermissions();
+    // The Stop button's truthfulness depends on the tone synth's playing
+    // state too; rebuild when it changes (a pattern ends silently).
+    _tonePlayingSub = _toneSynth.player.playingStream.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
+  /// Subscription to the tone synth's playing state (see initState).
+  StreamSubscription<bool>? _tonePlayingSub;
 
   @override
   void dispose() {
     if (mounted) {
+      _tonePlayingSub?.cancel();
       _pulseController.dispose();
       
       // Stop any active recording so the mic is freed and state is reset
@@ -152,15 +158,15 @@ class _PracticeScreenState extends State<PracticeScreen>
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    Colors.deepPurpleAccent.withOpacity(0.2),
-                    Colors.purpleAccent.withOpacity(0.1),
+                    Colors.deepPurpleAccent.withValues(alpha: 0.2),
+                    Colors.purpleAccent.withValues(alpha: 0.1),
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: Colors.deepPurpleAccent.withOpacity(0.3),
+                  color: Colors.deepPurpleAccent.withValues(alpha: 0.3),
                   width: 1,
                 ),
               ),
@@ -185,7 +191,7 @@ class _PracticeScreenState extends State<PracticeScreen>
                     widget.ragaData.name,
                     style: TextStyle(
                       fontSize: 18,
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.white.withValues(alpha: 0.8),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -193,7 +199,7 @@ class _PracticeScreenState extends State<PracticeScreen>
                     'Notes: ${widget.ragaData.notes.join(' ')}',
                     style: TextStyle(
                       fontSize: 14,
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -245,10 +251,7 @@ class _PracticeScreenState extends State<PracticeScreen>
 
             // Audio feedback section
             if (_lastFeedback != null) ...[
-              _buildAnalysisTabsRow(),
-              const SizedBox(height: 16),
-              if (_selectedAnalysisTab == 0) _buildFeedbackCard(),
-              if (_selectedAnalysisTab == 1) _buildAIFeedbackCard(),
+              _buildFeedbackCard(),
               const SizedBox(height: 24),
             ],
 
@@ -265,32 +268,98 @@ class _PracticeScreenState extends State<PracticeScreen>
                       Colors.green,
                       _audioService.isPlaying,
                       () => _playReferenceAudio(),
+                      enabled: !_audioService.isRecording &&
+                          !_audioService.isPlaying &&
+                          !_isAnalyzing,
                     ),
                     _controlButton(
                       'Stop',
                       Icons.stop,
                       Colors.red,
-                      false,
+                      _audioService.isPlaying || _toneSynth.player.playing,
                       () => _stopReferenceAudio(),
+                      enabled: !_audioService.isRecording &&
+                          (_audioService.isPlaying ||
+                              _toneSynth.player.playing),
                     ),
                   ],
                 ),
 
                 const SizedBox(height: 24),
 
+                // Plan 3b: without a stored Sa the analysis
+                // cannot be trusted, so recording is gated
+                // until the student sets one. Calibration's
+                // best-try save guarantees an exit.
+                if (context.read<AppStateService>().currentUser?.baseSaHz == null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Colors.deepPurpleAccent.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Your Sa isn\'t set yet',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Set it so your feedback matches your voice — it takes a minute.',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const SaCalibrationScreen(),
+                              ),
+                            );
+                            if (mounted) setState(() {});
+                          },
+                          icon: const Icon(Icons.music_note),
+                          label: const Text('Find Your Sa'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+
                 // Practice controls
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     _controlButton(
-                      'Record Practice',
-                      Icons.fiber_manual_record,
-                      Colors.orange,
+                      _audioService.isRecording
+                          ? 'Stop Recording'
+                          : 'Record Practice',
+                      _audioService.isRecording
+                          ? Icons.stop
+                          : Icons.fiber_manual_record,
+                      _audioService.isRecording
+                          ? Colors.red
+                          : Colors.orange,
                       _audioService.isRecording,
                       () => _toggleRecording(),
+                      enabled: context.read<AppStateService>().currentUser?.baseSaHz != null && !_audioService.isPlaying && !_isAnalyzing,
                     ),
                     _controlButton(
-                      _hasRecording ? 'Analyze Audio' : 'Record First',
+                      'Analyze Audio',
                       Icons.analytics,
                       _hasRecording ? Colors.purple : Colors.grey,
                       _isAnalyzing,
@@ -355,7 +424,7 @@ class _PracticeScreenState extends State<PracticeScreen>
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.2),
+                      color: Colors.green.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.green, width: 2),
                     ),
@@ -388,7 +457,7 @@ class _PracticeScreenState extends State<PracticeScreen>
                           height: 80,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: Colors.orange.withOpacity(0.3),
+                            color: Colors.orange.withValues(alpha: 0.3),
                             border: Border.all(color: Colors.orange, width: 2),
                           ),
                           child: const Icon(
@@ -407,7 +476,7 @@ class _PracticeScreenState extends State<PracticeScreen>
                     height: 80,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.purple.withOpacity(0.3),
+                      color: Colors.purple.withValues(alpha: 0.3),
                       border: Border.all(color: Colors.purple, width: 2),
                     ),
                     child: const Icon(
@@ -427,12 +496,14 @@ class _PracticeScreenState extends State<PracticeScreen>
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepPurpleAccent,
                       foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.grey,
+                      disabledForegroundColor: Colors.white70,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
                       elevation: 8,
                     ),
-                    onPressed: () => _logPractice(),
+                    onPressed: _lastFeedback == null ? null : () => _logPractice(),
                     icon: const Icon(Icons.book),
                     label: const Text(
                       'Log Practice Session',
@@ -479,12 +550,12 @@ class _PracticeScreenState extends State<PracticeScreen>
           width: 80,
           height: 80,
           decoration: BoxDecoration(
-            color: isActive ? effectiveColor : effectiveColor.withOpacity(0.1),
+            color: isActive ? effectiveColor : effectiveColor.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(40),
             border: Border.all(
               color: isActive
                   ? effectiveColor
-                  : effectiveColor.withOpacity(0.3),
+                  : effectiveColor.withValues(alpha: 0.3),
               width: 2,
             ),
           ),
@@ -501,7 +572,7 @@ class _PracticeScreenState extends State<PracticeScreen>
         Text(
           label,
           style: TextStyle(
-            color: enabled ? Colors.white : Colors.white.withOpacity(0.5),
+            color: enabled ? Colors.white : Colors.white.withValues(alpha: 0.5),
             fontSize: 14,
             fontWeight: FontWeight.w500,
           ),
@@ -516,9 +587,9 @@ class _PracticeScreenState extends State<PracticeScreen>
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
+        color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -557,12 +628,12 @@ class _PracticeScreenState extends State<PracticeScreen>
                     decoration: BoxDecoration(
                       color: selected
                           ? Colors.deepPurpleAccent
-                          : Colors.white.withOpacity(0.06),
+                          : Colors.white.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: selected
                             ? Colors.deepPurpleAccent
-                            : Colors.white.withOpacity(0.1),
+                            : Colors.white.withValues(alpha: 0.1),
                       ),
                     ),
                     child: Text(
@@ -613,12 +684,12 @@ class _PracticeScreenState extends State<PracticeScreen>
                     decoration: BoxDecoration(
                       color: selected
                           ? Colors.deepPurpleAccent
-                          : Colors.white.withOpacity(0.06),
+                          : Colors.white.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: selected
                             ? Colors.deepPurpleAccent
-                            : Colors.white.withOpacity(0.1),
+                            : Colors.white.withValues(alpha: 0.1),
                       ),
                     ),
                     child: Text(
@@ -634,310 +705,6 @@ class _PracticeScreenState extends State<PracticeScreen>
               );
             }).toList(),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAnalysisTabsRow() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () => setState(() => _selectedAnalysisTab = 0),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _selectedAnalysisTab == 0
-                      ? Colors.deepPurpleAccent
-                      : Colors.transparent,
-                  border: Border.all(color: Colors.deepPurpleAccent),
-                  borderRadius: const BorderRadius.horizontal(
-                    left: Radius.circular(8),
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  'Current Analysis',
-                  style: TextStyle(
-                    color: _selectedAnalysisTab == 0
-                        ? Colors.white
-                        : Colors.deepPurpleAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () => setState(() => _selectedAnalysisTab = 1),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _selectedAnalysisTab == 1
-                      ? Colors.deepPurpleAccent
-                      : Colors.transparent,
-                  border: Border.all(color: Colors.deepPurpleAccent),
-                  borderRadius: const BorderRadius.horizontal(
-                    right: Radius.circular(8),
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  'AI Analysis',
-                  style: TextStyle(
-                    color: _selectedAnalysisTab == 1
-                        ? Colors.white
-                        : Colors.deepPurpleAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAIFeedbackCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.smart_toy, color: Colors.deepPurpleAccent, size: 24),
-              const SizedBox(width: 8),
-              const Text(
-                'AI Guru Feedback',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (_isFetchingAIFeedback)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24.0),
-                child: Column(
-                  children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text(
-                      'Analyzing your performance...',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (_aiFeedbackError != null)
-            Text(_aiFeedbackError!, style: TextStyle(color: Colors.red[700]))
-          else if (_aiFeedback != null)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Display numeric parameters
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildParameterItem(
-                        'Pitch',
-                        '${_aiFeedback!.pitch.toStringAsFixed(1)} Hz',
-                        Colors.blue,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildParameterItem(
-                        'Tempo',
-                        '${_aiFeedback!.tempo.toStringAsFixed(0)} BPM',
-                        Colors.orange,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildParameterItem(
-                        'Brightness',
-                        '${_aiFeedback!.brightness.toStringAsFixed(0)}%',
-                        Colors.teal,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildParameterItem(
-                        'Stability',
-                        '${_aiFeedback!.stability.toStringAsFixed(0)}%',
-                        Colors.indigo,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildParameterItem(
-                        'Duration',
-                        '${_aiFeedback!.duration.toStringAsFixed(1)}s',
-                        Colors.purple,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: SizedBox(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Display Notes arrays
-                if (_aiFeedback!.detectedNotes.isNotEmpty) ...[
-                  const Text(
-                    'Detected Notes:',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: _aiFeedback!.detectedNotes
-                        .map(
-                          (note) => Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.green[50],
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.green[200]!),
-                            ),
-                            child: Text(
-                              note,
-                              style: TextStyle(
-                                color: Colors.green[700],
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                if (_aiFeedback!.missingNotes.isNotEmpty) ...[
-                  const Text(
-                    'Missing Notes:',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: _aiFeedback!.missingNotes
-                        .map(
-                          (note) => Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.orange[50],
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.orange[200]!),
-                            ),
-                            child: Text(
-                              note,
-                              style: TextStyle(
-                                color: Colors.orange[700],
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                // Display verbal feedback
-                const Text(
-                  'Feedback:',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[50],
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _aiFeedback!.feedback,
-                    style: TextStyle(
-                      color: Colors.grey[700],
-                      fontSize: 14,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          else
-            const Text(
-              'No AI feedback available.',
-              style: TextStyle(color: Colors.grey),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildParameterItem(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
         ],
       ),
     );
@@ -1106,9 +873,9 @@ class _PracticeScreenState extends State<PracticeScreen>
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [
@@ -1180,10 +947,12 @@ class _PracticeScreenState extends State<PracticeScreen>
       // piano notes through the speaker. On iOS, this triggers the system's
       // echo cancellation which suppresses the microphone input to near-zero,
       // making pitch detection impossible.
+      final storedSaHz = context.read<AppStateService>().currentUser?.baseSaHz;
       final track = _toneSynth.buildTrack(
         tokens: tokens,
         bpm: _bpm,
         transposeSemitones: _transpose,
+        baseSaHz: storedSaHz,
       );
 
       // Start recording AFTER building the track (mic-only, no playback).
@@ -1222,6 +991,12 @@ class _PracticeScreenState extends State<PracticeScreen>
       _isAnalyzing = true;
     });
 
+    // Plan 1.8: the signed-in student's stored Sa (Patch 3a), read
+    // synchronously here, before any await in this method. Null when the
+    // student has not calibrated yet — compareAudio then uses its legacy
+    // pitch scoring.
+    final userSaHz = context.read<AppStateService>().currentUser?.baseSaHz;
+
     try {
       // Show analyzing message
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1236,6 +1011,7 @@ class _PracticeScreenState extends State<PracticeScreen>
       // Analyze the reference audio if not already done
       if (_referenceCharacteristics == null) {
         print('Analyzing reference audio: ${widget.audioPath}');
+        _usedReferenceFallback = false;
 
         // Get the asset file as a temporary file for analysis
         final referenceFile = await _audioService.getAssetFile(
@@ -1263,6 +1039,7 @@ class _PracticeScreenState extends State<PracticeScreen>
               spectrum: const [],
               duration: 5.0,
             );
+            _usedReferenceFallback = true;
           } else {
             print('Reference notes: ${_referenceCharacteristics?.notes}');
           }
@@ -1278,6 +1055,7 @@ class _PracticeScreenState extends State<PracticeScreen>
             spectrum: const [],
             duration: 5.0,
           );
+          _usedReferenceFallback = true;
         }
       }
 
@@ -1310,10 +1088,32 @@ class _PracticeScreenState extends State<PracticeScreen>
 
       // Compare both audio files
       print('Comparing audio files...');
+      // Plan 1.8: estimate the reference's Sa from its own contour. An
+      // estimate of 0 means it could not be estimated (e.g. the fallback
+      // dummy reference, which has no contour) and leaves the legacy pitch
+      // scoring in place.
+      final estimatedReferenceSaHz = estimateSaFromContour(
+        _referenceCharacteristics!.pitchTrajectory,
+      );
+      print(
+        'Sa for comparison - user: $userSaHz Hz, reference estimate: ${estimatedReferenceSaHz.toStringAsFixed(2)} Hz',
+      );
+      final driftCheck = checkSaDrift(
+        userTrajectoryHz: _userCharacteristics!.pitchTrajectory,
+        storedSaHz: userSaHz,
+      );
+      if (driftCheck != null) {
+        print('Sa drift check: $driftCheck');
+      }
       final feedback = await _analysisService.compareAudio(
         _referenceCharacteristics!,
         _userCharacteristics!,
         widget.ragaData.notes,
+        userSaHz: userSaHz,
+        referenceSaHz: estimatedReferenceSaHz > 0
+            ? estimatedReferenceSaHz
+            : null,
+        table: RagaSwaraTable.forRaga(widget.ragaData.name),
       );
       print('Comparison complete');
 
@@ -1321,12 +1121,21 @@ class _PracticeScreenState extends State<PracticeScreen>
         _isAnalyzing = false;
         _lastFeedback = feedback;
         _showCharacteristicsDisplay = true;
-        _aiFeedback = null;
-        _aiFeedbackError = null;
-        _selectedAnalysisTab = 0;
       });
 
-      _fetchAIFeedback();
+      if (_usedReferenceFallback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Warning: the reference recording could not be analyzed. '
+              'Scores are compared against a default reference, not the recording.',
+            ),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 6),
+          ),
+        );
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1349,36 +1158,6 @@ class _PracticeScreenState extends State<PracticeScreen>
           duration: const Duration(seconds: 3),
         ),
       );
-    }
-  }
-
-  Future<void> _fetchAIFeedback() async {
-    if (_recordedAudioPath == null) return;
-    setState(() {
-      _isFetchingAIFeedback = true;
-      _aiFeedback = null;
-      _aiFeedbackError = null;
-    });
-
-    try {
-      final aiFeedbackResult = await AIAnalysisService().getAIFeedback(
-        userAudioPath: _recordedAudioPath!,
-        expectedNotes: widget.ragaData.notes,
-        ragaName: widget.ragaData.name,
-      );
-      if (mounted) {
-        setState(() {
-          _aiFeedback = aiFeedbackResult;
-          _isFetchingAIFeedback = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _aiFeedbackError = 'Failed to generate AI feedback: $e';
-          _isFetchingAIFeedback = false;
-        });
-      }
     }
   }
 
@@ -1521,13 +1300,13 @@ class _PracticeScreenState extends State<PracticeScreen>
         overallAccuracy: _lastFeedback?.overallAccuracy,
         tempoAccuracy: _lastFeedback?.tempoAccuracy,
         rhythmAccuracy: _lastFeedback?.rhythmAccuracy,
-        // Populate new detailed fields from AI feedback if available
-        avgPitch: _aiFeedback?.pitch ?? _userCharacteristics?.pitch,
+        // Populate detailed fields from the local analysis only
+        avgPitch: _userCharacteristics?.pitch,
         avgVolume: null, // Volume parameter is removed per request
-        bpm: _aiFeedback?.tempo ?? _userCharacteristics?.tempo,
-        detectedNotes: _aiFeedback?.detectedNotes ?? _userCharacteristics?.notes,
-        brightness: _aiFeedback?.brightness ?? _userCharacteristics?.spectralCentroid,
-        stability: _aiFeedback?.stability ?? _userCharacteristics?.qualityScore,
+        bpm: _userCharacteristics?.tempo,
+        detectedNotes: _userCharacteristics?.notes,
+        brightness: _userCharacteristics?.spectralCentroid,
+        stability: _userCharacteristics?.qualityScore,
       );
 
       await appState.addPracticeSession(practiceSession);
@@ -1544,12 +1323,12 @@ class _PracticeScreenState extends State<PracticeScreen>
           notes: notes,
           pitchAccuracy: _lastFeedback?.pitchAccuracy.round() ?? 75,
           practiceTime: practiceTime,
-          avgPitch: _aiFeedback?.pitch ?? _userCharacteristics?.pitch,
+          avgPitch: _userCharacteristics?.pitch,
           avgVolume: null,
-          bpm: _aiFeedback?.tempo ?? _userCharacteristics?.tempo,
-          detectedNotes: _aiFeedback?.detectedNotes ?? _userCharacteristics?.notes,
-          brightness: _aiFeedback?.brightness ?? _userCharacteristics?.spectralCentroid,
-          stability: _aiFeedback?.stability ?? _userCharacteristics?.qualityScore,
+          bpm: _userCharacteristics?.tempo,
+          detectedNotes: _userCharacteristics?.notes,
+          brightness: _userCharacteristics?.spectralCentroid,
+          stability: _userCharacteristics?.qualityScore,
         );
 
         await appState.addJournalEntry(journalEntry);
@@ -1598,16 +1377,19 @@ class _PracticeScreenState extends State<PracticeScreen>
 
   Future<void> _playReferenceAudio() async {
     if (widget.isAlankar) {
+      final storedSaHz = context.read<AppStateService>().currentUser?.baseSaHz;
       final tokens = withDescendingMirror(widget.alankar!.pattern);
       final track = await _toneSynth.playPattern(
         tokens: tokens,
         bpm: _bpm,
         transposeSemitones: _transpose,
+        baseSaHz: storedSaHz,
       );
       setState(() {
         _targetTrack = track;
       });
     } else {
+      final storedSaHz = context.read<AppStateService>().currentUser?.baseSaHz;
       await _audioService.playAudio(
         widget.audioPath,
         ragaName: widget.ragaData.name,
@@ -1625,6 +1407,7 @@ class _PracticeScreenState extends State<PracticeScreen>
           tokens: widget.ragaData.notes,
           bpm: _bpm,
           transposeSemitones: _transpose,
+          baseSaHz: storedSaHz,
         );
       });
     }

@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -9,6 +10,8 @@ import 'package:fftea/fftea.dart';
 // import 'package:collection/collection.dart'; // Will be used in future updates
 import '../models/audio_characteristics.dart';
 import '../models/audio_feedback.dart';
+import 'normalized_compare.dart';
+import 'sa_pitch.dart';
 
 class AudioAnalysisService {
   static final AudioAnalysisService _instance =
@@ -97,8 +100,11 @@ class AudioAnalysisService {
   Future<AudioFeedback> compareAudio(
     AudioCharacteristics reference,
     AudioCharacteristics user,
-    List<String> expectedNotes,
-  ) async {
+    List<String> expectedNotes, {
+    double? userSaHz,
+    double? referenceSaHz,
+    RagaSwaraTable? table,
+  }) async {
     try {
       print('\n=== Audio Comparison ===');
       print(
@@ -129,8 +135,31 @@ class AudioAnalysisService {
         );
       }
 
-      // Enhanced pitch accuracy using frequency domain analysis
-      final pitchAccuracy = _calculateEnhancedPitchAccuracy(reference, user);
+      // Enhanced pitch accuracy using frequency domain analysis.
+      // Plan 1.8: when both Sa values are known and both pitch contours
+      // exist, score in Sa-normalized cents space (normalized_compare.dart)
+      // so a student is not punished for singing at a different Sa than the
+      // reference. In every other case the legacy calculation runs
+      // unchanged.
+      final double pitchAccuracy;
+      if (userSaHz != null &&
+          userSaHz > 0 &&
+          referenceSaHz != null &&
+          referenceSaHz > 0 &&
+          reference.pitchTrajectory.isNotEmpty &&
+          user.pitchTrajectory.isNotEmpty) {
+        pitchAccuracy = compareNormalized(
+          referenceTrajectoryHz: reference.pitchTrajectory,
+          referenceSaHz: referenceSaHz,
+          userTrajectoryHz: user.pitchTrajectory,
+          userSaHz: userSaHz,
+        ).trajectoryScore;
+        print(
+          'Pitch scoring: Sa-normalized (user Sa $userSaHz Hz, reference Sa $referenceSaHz Hz)',
+        );
+      } else {
+        pitchAccuracy = _calculateEnhancedPitchAccuracy(reference, user);
+      }
       print('Pitch Accuracy: ${pitchAccuracy.toStringAsFixed(2)}%');
 
       // Enhanced tempo accuracy with beat tracking
@@ -180,15 +209,49 @@ class AudioAnalysisService {
         missedNotes,
       );
 
+      // 1.2: when scoring ran Sa-normalized with a raga table, diagnose
+      // each swara from the user contour and rebuild missed notes from
+      // the raga-constrained sung sets (non-raga notes impossible).
+      var swaraDiagnosis = const <SwaraDiagnosis>[];
+      List<String>? constrainedMissed;
+      // The diagnosis itself needs only the student's Sa and contour;
+      // the reference contributes only extra missed-note candidates
+      // when its Sa and contour are available.
+      if (table != null &&
+          userSaHz != null &&
+          userSaHz > 0 &&
+          user.pitchTrajectory.isNotEmpty) {
+        swaraDiagnosis =
+            diagnoseSwara(user.pitchTrajectory, userSaHz, table);
+        print('Swara diagnosis: ${swaraDiagnosis.join(', ')}');
+        final sungUser =
+            constrainedSungNotes(user.pitchTrajectory, userSaHz, table);
+        final missedSet = <String>{};
+        for (final n in expectedNotes) {
+          if (!sungUser.contains(n)) missedSet.add(n);
+        }
+        if (referenceSaHz != null &&
+            referenceSaHz > 0 &&
+            reference.pitchTrajectory.isNotEmpty) {
+          final sungRef = constrainedSungNotes(
+              reference.pitchTrajectory, referenceSaHz, table);
+          for (final n in sungRef) {
+            if (!sungUser.contains(n)) missedSet.add(n);
+          }
+        }
+        constrainedMissed = missedSet.toList();
+      }
+
       return AudioFeedback(
         pitchAccuracy: pitchAccuracy,
         tempoAccuracy: tempoAccuracy,
         rhythmAccuracy: rhythmAccuracy,
         overallAccuracy: overallAccuracy,
-        missedNotes: missedNotes,
+        missedNotes: constrainedMissed ?? missedNotes,
         suggestions: suggestions,
         overallFeedback: overallFeedback,
         characteristics: user,
+        swaraDiagnosis: swaraDiagnosis,
       );
     } catch (e) {
       print('Error in compareAudio: $e');
@@ -900,8 +963,9 @@ class AudioAnalysisService {
   ) {
     // If user tempo was not detected, they likely weren't singing – return 0 instead of a high neutral.
     if (user.tempo == 0) return 0.0;
-    if (reference.tempo == 0)
+    if (reference.tempo == 0) {
       return 50.0; // Neutral only when reference is missing
+    }
 
     final tempoRatio = user.tempo / reference.tempo;
     final tempoDeviation = (tempoRatio - 1.0).abs();
@@ -922,8 +986,9 @@ class AudioAnalysisService {
   ) {
     // If user has no rhythm data, they weren't singing – return 0, not a high neutral.
     if (user.rhythm.isEmpty) return 0.0;
-    if (reference.rhythm.isEmpty)
+    if (reference.rhythm.isEmpty) {
       return 50.0; // Neutral only when reference is missing
+    }
 
     final correlation = _crossCorrelation(reference.rhythm, user.rhythm);
 
