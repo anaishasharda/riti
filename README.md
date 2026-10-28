@@ -1,4 +1,4 @@
-# sargam_app
+# Riti
 
 A new Flutter project.
 
