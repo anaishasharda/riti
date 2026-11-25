@@ -892,7 +892,9 @@ class _PracticeScreenState extends State<PracticeScreen>
         'Your singing came through very quietly. Move a little closer to the phone and sing out a little more.',
       AudibilityIssue.notEnoughVoiced =>
         'I could only hear part of your singing. Try again somewhere quieter, a little closer to the phone.',
-      null =>
+      // Unreachable in practice: this card only renders when the take
+      // is not audible, i.e. issue != ok. Required for exhaustiveness.
+      AudibilityIssue.ok =>
         "I couldn't hear your singing well enough to judge it. Try again, a little closer to the phone.",
     };
 
@@ -1157,9 +1159,9 @@ class _PracticeScreenState extends State<PracticeScreen>
       // back scored at 14.49%. assessAudibility (F2a) checks length, then
       // volume, then voiced share, and reports the first failure.
       final audibility = assessAudibility(
-        volume: _userCharacteristics!.volume,
+        volumeRms: _userCharacteristics!.volume,
         durationSeconds: _userCharacteristics!.duration,
-        pitchTrajectoryHz: _userCharacteristics!.pitchTrajectory,
+        userTrajectoryHz: _userCharacteristics!.pitchTrajectory,
       );
       if (!audibility.audible) {
         print('Audibility gate: ${audibility.issue}');
