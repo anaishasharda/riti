@@ -8,6 +8,7 @@ import 'package:sargam_app/services/audio_analysis_service.dart';
 import 'package:sargam_app/services/app_state_service.dart';
 import 'package:sargam_app/services/normalized_compare.dart';
 import 'package:sargam_app/services/sa_pitch.dart';
+import 'package:sargam_app/services/feedback_mapper.dart';
 
 import '../../models/audio_feedback.dart';
 import '../../models/audio_characteristics.dart';
@@ -723,6 +724,16 @@ class _PracticeScreenState extends State<PracticeScreen>
   Widget _buildFeedbackCard() {
     if (_lastFeedback == null) return const SizedBox.shrink();
 
+    // F1b: when a per-swara diagnosis exists, the student sees the
+    // mapper's one-fix card (teacher's rules) instead of the score
+    // tiles. No table (e.g. Bhairav) or no diagnosis: the score card
+    // below stays as the fallback.
+    final table = RagaSwaraTable.forRaga(widget.ragaData.name);
+    final diagnosis = _lastFeedback!.swaraDiagnosis;
+    if (table != null && diagnosis.isNotEmpty) {
+      return _buildMapperFeedbackCard(mapDiagnosisToFeedback(diagnosis, table));
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -877,6 +888,98 @@ class _PracticeScreenState extends State<PracticeScreen>
         ],
       ),
     );
+  }
+
+  /// Feedback card (F1b). Renders the mapper's one-fix card: one fix,
+  /// one thing that went well, and the sound to copy (Sa first, then
+  /// the note). No scores, no cents. The shift kind offers a Re-check
+  /// Sa action instead of a Hear button; all-in-tune shows praise only.
+  Widget _buildMapperFeedbackCard(FeedbackCardContent card) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.music_note, color: Colors.deepPurpleAccent, size: 24),
+              const SizedBox(width: 8),
+              const Text(
+                'How that take went',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          if (card.fix != null) ...[
+            const SizedBox(height: 16),
+            Text(
+              card.fix!,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ],
+          if (card.kind == FeedbackKind.shift) ...[
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _isAnalyzing ? null : _recheckSa,
+              icon: const Icon(Icons.music_note),
+              label: const Text('Re-check Sa'),
+            ),
+          ],
+          if (card.hearTokens.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _isAnalyzing
+                  ? null
+                  : () => _playHearPattern(card.hearTokens),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Listen'),
+            ),
+          ],
+          if (card.reinforcement != null) ...[
+            const SizedBox(height: 16),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.check_circle, size: 20, color: Colors.green[600]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    card.reinforcement!,
+                    style: TextStyle(color: Colors.grey[700], fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Hear sound (F1b): Sa first, then the note, at the stored Sa and
+  /// the screen's tempo — never the note alone (teacher's rule 6).
+  Future<void> _playHearPattern(List<String> tokens) async {
+    final storedSaHz = context.read<AppStateService>().currentUser?.baseSaHz;
+    await _toneSynth.playPattern(
+      tokens: tokens,
+      bpm: _bpm,
+      transposeSemitones: 0,
+      baseSaHz: storedSaHz,
+    );
+  }
+
+  /// Shift fix (F1b): the saved Sa itself may be wrong, so offer the
+  /// calibration screen — same navigation as the Find Your Sa gate card.
+  Future<void> _recheckSa() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SaCalibrationScreen()));
+    if (mounted) setState(() {});
   }
 
   /// Couldn't-hear card (F2b). Rendered instead of the feedback card when
