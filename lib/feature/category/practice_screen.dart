@@ -56,6 +56,9 @@ class _PracticeScreenState extends State<PracticeScreen>
 
   bool _isAnalyzing = false;
   AudioFeedback? _lastFeedback;
+  // F2b: the audibility verdict for the most recent analysis. When set and
+  // not audible, the couldn't-hear card renders instead of the feedback card.
+  AudibilityResult? _lastAudibility;
   AudioCharacteristics? _referenceCharacteristics;
   bool _usedReferenceFallback = false;
   AudioCharacteristics? _userCharacteristics;
@@ -252,6 +255,13 @@ class _PracticeScreenState extends State<PracticeScreen>
             // Audio feedback section
             if (_lastFeedback != null) ...[
               _buildFeedbackCard(),
+              const SizedBox(height: 24),
+            ],
+
+            // Couldn't-hear card (F2b): shown instead of scores when the
+            // take was too short, too quiet, or too little voiced sound.
+            if (_lastAudibility != null && !_lastAudibility!.audible) ...[
+              _buildAudibilityCard(),
               const SizedBox(height: 24),
             ],
 
@@ -869,6 +879,59 @@ class _PracticeScreenState extends State<PracticeScreen>
     );
   }
 
+  /// Couldn't-hear card (F2b). Rendered instead of the feedback card when
+  /// the take failed the audibility gate: one plain-language reason plus the
+  /// one action (record again). No scores, no jargon, no cents.
+  Widget _buildAudibilityCard() {
+    if (_lastAudibility == null) return const SizedBox.shrink();
+
+    final message = switch (_lastAudibility!.issue) {
+      AudibilityIssue.tooShort =>
+        'That take was very short. Sing the whole line once through, then tap Analyze again.',
+      AudibilityIssue.tooQuiet =>
+        'Your singing came through very quietly. Move a little closer to the phone and sing out a little more.',
+      AudibilityIssue.notEnoughVoiced =>
+        'I could only hear part of your singing. Try again somewhere quieter, a little closer to the phone.',
+      null =>
+        "I couldn't hear your singing well enough to judge it. Try again, a little closer to the phone.",
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.mic_off, color: Colors.orange, size: 24),
+              const SizedBox(width: 8),
+              const Text(
+                "I couldn't hear you clearly",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            style: TextStyle(color: Colors.grey[700], fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap Record to try again.',
+            style: TextStyle(color: Colors.grey[700], fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAccuracyItem(String label, String value, Color color) {
     return Container(
       padding: const EdgeInsets.all(12),
@@ -910,6 +973,7 @@ class _PracticeScreenState extends State<PracticeScreen>
         _showSingAlong = false;
         // Clear previous analysis when new recording is made
         _lastFeedback = null;
+        _lastAudibility = null;
         _userCharacteristics = null;
       });
 
@@ -934,6 +998,7 @@ class _PracticeScreenState extends State<PracticeScreen>
         _recordedAudioPath = null;
         _hasRecording = false;
         _lastFeedback = null;
+        _lastAudibility = null;
         _userCharacteristics = null;
       });
 
@@ -1086,6 +1151,27 @@ class _PracticeScreenState extends State<PracticeScreen>
         );
       }
 
+      // F2b: audibility gate. An inaudible take must never reach scoring:
+      // the old in-service gate (volume < 0.01 AND pitch == 0) passed a
+      // fan-noise take (0.006 RMS, hallucinated 953.75 Hz pitch) that came
+      // back scored at 14.49%. assessAudibility (F2a) checks length, then
+      // volume, then voiced share, and reports the first failure.
+      final audibility = assessAudibility(
+        volume: _userCharacteristics!.volume,
+        durationSeconds: _userCharacteristics!.duration,
+        pitchTrajectoryHz: _userCharacteristics!.pitchTrajectory,
+      );
+      if (!audibility.audible) {
+        print('Audibility gate: ${audibility.issue}');
+        setState(() {
+          _isAnalyzing = false;
+          _lastFeedback = null;
+          _lastAudibility = audibility;
+          _showCharacteristicsDisplay = false;
+        });
+        return;
+      }
+
       // Compare both audio files
       print('Comparing audio files...');
       // Plan 1.8: estimate the reference's Sa from its own contour. An
@@ -1120,6 +1206,7 @@ class _PracticeScreenState extends State<PracticeScreen>
       setState(() {
         _isAnalyzing = false;
         _lastFeedback = feedback;
+        _lastAudibility = null;
         _showCharacteristicsDisplay = true;
       });
 
