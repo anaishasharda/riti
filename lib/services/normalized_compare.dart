@@ -421,3 +421,110 @@ SaDriftCheck? checkSaDrift({
     ),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Audibility gate (plan F2)
+// ---------------------------------------------------------------------------
+
+/// Why a take cannot be judged, or [AudibilityIssue.ok] when it can.
+///
+/// The gate answers one question — could the app hear the singing well
+/// enough to judge it? — before any score or diagnosis is trusted. A take
+/// that fails is unjudgeable, not badly sung: the app must say so instead
+/// of scoring it.
+enum AudibilityIssue {
+  /// The take is audible: judge it normally.
+  ok,
+
+  /// RMS volume below [_minAudibleVolumeRms]: the mic heard too little.
+  /// (Device evidence: a fan-noise take at 0.006 RMS carried a hallucinated
+  /// pitch of 953.75 Hz and scored 14.49% — the old gate passed it because
+  /// its pitch was non-zero.)
+  tooQuiet,
+
+  /// Duration below [_minAudibleDurationSeconds]: too little singing to
+  /// judge, however loud.
+  tooShort,
+
+  /// Too few voiced contour points, or too small a voiced share: the
+  /// tracker found too little pitched sound to judge.
+  notEnoughVoiced,
+}
+
+/// Result of [assessAudibility]: the verdict, plus the predicate callers
+/// branch on.
+class AudibilityResult {
+  /// The verdict: [AudibilityIssue.ok] when the take can be judged.
+  final AudibilityIssue issue;
+
+  const AudibilityResult(this.issue);
+
+  /// True when the take can be judged (issue is [AudibilityIssue.ok]).
+  bool get audible => issue == AudibilityIssue.ok;
+
+  @override
+  String toString() => 'AudibilityResult($issue)';
+}
+
+/// Minimum RMS volume for a take to be judged.
+///
+/// Starting hypothesis (plan section 6 validation tunes it): normal singing
+/// measures ~8% RMS on the test phone and a quiet-but-valid take 8.3%,
+/// while the fan-noise take that motivated this gate measured 0.6%.
+/// RMS thresholds need re-checking on other phones before the pilot.
+const double _minAudibleVolumeRms = 0.02;
+
+/// Minimum take length for a take to be judged, in seconds.
+const double _minAudibleDurationSeconds = 2.0;
+
+/// Minimum voiced contour points for a take to be judged.
+const int _minAudibleVoicedPoints = 20;
+
+/// Minimum share of contour points that must be voiced (pitch > 0).
+const double _minAudibleVoicedFraction = 0.20;
+
+/// Judge whether a take is audible enough to score or diagnose.
+///
+/// Takes the measurements the analysis path already has: the take's RMS
+/// volume and duration in seconds, and its pitch contour
+/// [userTrajectoryHz] (unvoiced samples are <= 0).
+///
+/// Checks run in a fixed order and the first failure wins, so one take
+/// reports exactly one issue:
+///   1. [AudibilityIssue.tooShort] — duration below the minimum. Length
+///      is the most basic precondition: with barely any audio, the volume
+///      and voiced statistics are meaningless.
+///   2. [AudibilityIssue.tooQuiet] — RMS volume below the minimum.
+///   3. [AudibilityIssue.notEnoughVoiced] — fewer than
+///      [_minAudibleVoicedPoints] voiced points, or a voiced share below
+///      [_minAudibleVoicedFraction].
+///
+/// Never throws: an empty contour reports
+/// [AudibilityIssue.notEnoughVoiced].
+///
+/// This is the gate only — it judges, it does not act. The practice
+/// screen (F2b) decides what the student sees for an unjudgeable take.
+AudibilityResult assessAudibility({
+  required double volumeRms,
+  required double durationSeconds,
+  required List<double> userTrajectoryHz,
+}) {
+  if (durationSeconds < _minAudibleDurationSeconds) {
+    return const AudibilityResult(AudibilityIssue.tooShort);
+  }
+
+  if (volumeRms < _minAudibleVolumeRms) {
+    return const AudibilityResult(AudibilityIssue.tooQuiet);
+  }
+
+  final total = userTrajectoryHz.length;
+  final voiced = userTrajectoryHz.where((f) => f > 0).length;
+  final voicedFraction = total == 0 ? 0.0 : voiced / total;
+
+  if (voiced < _minAudibleVoicedPoints ||
+      voicedFraction < _minAudibleVoicedFraction) {
+    return const AudibilityResult(AudibilityIssue.notEnoughVoiced);
+  }
+
+  return const AudibilityResult(AudibilityIssue.ok);
+}

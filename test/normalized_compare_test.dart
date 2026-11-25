@@ -402,4 +402,145 @@ void driftTests() {
       expect(r.deviationCents, lessThan(-25));
     });
   });
+
+  group('assessAudibility (F2)', () {
+    /// Contour with exactly [voiced] voiced points out of [total].
+    List<double> voicedThenSilent(int voiced, int total) {
+      return List<double>.generate(total, (i) => i < voiced ? 220.0 : 0.0);
+    }
+
+    test('1. fan-noise regression: 0.006 RMS with a hallucinated pitch is tooQuiet',
+        () {
+      // Device evidence: a fan-noise take at 0.006 RMS carried a hallucinated
+      // pitch of 953.75 Hz and scored 14.49% — the old gate passed it because
+      // its pitch was non-zero. The new gate must flag it on volume alone.
+      final r = assessAudibility(
+        volumeRms: 0.006,
+        durationSeconds: 7.8,
+        userTrajectoryHz: List<double>.filled(100, 953.75),
+      );
+      expect(r.issue, AudibilityIssue.tooQuiet);
+      expect(r.audible, isFalse);
+    });
+
+    test('2. quiet-but-valid Oct 12 take: 0.083 RMS, 7.8s is audible', () {
+      // The Oct 12 take was quiet (8.3% RMS) yet valid — the gate must not
+      // reject takes like it.
+      final r = assessAudibility(
+        volumeRms: 0.083,
+        durationSeconds: 7.8,
+        userTrajectoryHz: buildContour(207.65, avroh, noiseA),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+      expect(r.audible, isTrue);
+    });
+
+    test('3. normal singing: 0.082 RMS, 5s, 150 voiced points is audible',
+        () {
+      final r = assessAudibility(
+        volumeRms: 0.082,
+        durationSeconds: 5.0,
+        userTrajectoryHz: List<double>.filled(150, 220.0),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+      expect(r.audible, isTrue);
+    });
+
+    test('4. too short: 1.5s at good volume is tooShort', () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 1.5,
+        userTrajectoryHz: List<double>.filled(100, 220.0),
+      );
+      expect(r.issue, AudibilityIssue.tooShort);
+      expect(r.audible, isFalse);
+    });
+
+    test('5. boundary: exactly 2.0s passes the length check', () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 2.0,
+        userTrajectoryHz: List<double>.filled(100, 220.0),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+    });
+
+    test('6. boundary: exactly 0.02 RMS passes the volume check', () {
+      final r = assessAudibility(
+        volumeRms: 0.02,
+        durationSeconds: 6.0,
+        userTrajectoryHz: List<double>.filled(100, 220.0),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+    });
+
+    test('7. too few voiced: 10 of 100 points is notEnoughVoiced', () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 6.0,
+        userTrajectoryHz: voicedThenSilent(10, 100),
+      );
+      expect(r.issue, AudibilityIssue.notEnoughVoiced);
+      expect(r.audible, isFalse);
+    });
+
+    test('8. low voiced share: 25 of 200 points (12.5%) is notEnoughVoiced',
+        () {
+      // Count alone passes (>= 20) — the fraction rule is what fires.
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 6.0,
+        userTrajectoryHz: voicedThenSilent(25, 200),
+      );
+      expect(r.issue, AudibilityIssue.notEnoughVoiced);
+    });
+
+    test('9. boundary: exactly 20 voiced of 20 is audible', () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 6.0,
+        userTrajectoryHz: voicedThenSilent(20, 20),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+    });
+
+    test('10. boundary: 20 of 100 (exactly 20% voiced) is audible', () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 6.0,
+        userTrajectoryHz: voicedThenSilent(20, 100),
+      );
+      expect(r.issue, AudibilityIssue.ok);
+    });
+
+    test('11. empty contour: no voiced points is notEnoughVoiced, no throw',
+        () {
+      final r = assessAudibility(
+        volumeRms: 0.10,
+        durationSeconds: 6.0,
+        userTrajectoryHz: const <double>[],
+      );
+      expect(r.issue, AudibilityIssue.notEnoughVoiced);
+      expect(r.audible, isFalse);
+    });
+
+    test('12. priority: short AND quiet reports tooShort', () {
+      final r = assessAudibility(
+        volumeRms: 0.005,
+        durationSeconds: 1.0,
+        userTrajectoryHz: List<double>.filled(100, 220.0),
+      );
+      expect(r.issue, AudibilityIssue.tooShort);
+    });
+
+    test('13. priority: quiet AND too-few-voiced reports tooQuiet', () {
+      final r = assessAudibility(
+        volumeRms: 0.005,
+        durationSeconds: 6.0,
+        userTrajectoryHz: voicedThenSilent(5, 100),
+      );
+      expect(r.issue, AudibilityIssue.tooQuiet);
+    });
+  });
+
 }
