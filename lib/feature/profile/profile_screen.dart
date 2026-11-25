@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/app_state_service.dart';
+import '../../services/tone_synth_service.dart';
 import '../../models/user_profile.dart';
 import '../auth/login.dart';
 import 'sa_calibration_screen.dart';
@@ -15,6 +16,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final TextEditingController _nameController = TextEditingController();
   bool _isEditing = false;
+  final ToneSynthService _toneSynth = ToneSynthService();
 
   @override
   void initState() {
@@ -27,6 +29,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void dispose() {
     _nameController.dispose();
     super.dispose();
+  }
+
+  /// Hear the saved Sa: one Sa note at the stored pitch, the same
+  /// sound as the calibration screen's Hear It Again.
+  Future<void> _playStoredSa(double saHz) async {
+    await _toneSynth.playPattern(
+      tokens: const ['Sa'],
+      bpm: 20,
+      transposeSemitones: 0,
+      baseSaHz: saHz,
+    );
   }
 
   @override
@@ -262,20 +275,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SaCalibrationScreen(),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const SaCalibrationScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.music_note),
+                        label: Text(
+                          user.baseSaHz == null
+                              ? 'Find Your Sa'
+                              : 'Recalibrate Sa',
                         ),
-                      );
-                    },
-                    icon: const Icon(Icons.music_note),
-                    label: Text(
-                      user.baseSaHz == null
-                          ? 'Find Your Sa'
-                          : 'Recalibrate Sa',
-                    ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: user.baseSaHz == null
+                            ? null
+                            : () => _playStoredSa(user.baseSaHz!),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('Hear my Sa'),
+                      ),
+                    ],
                   ),
                 ],
               ),
