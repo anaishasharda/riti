@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/app_state_service.dart';
+import '../../services/sa_pitch.dart';
 import '../../services/tone_synth_service.dart';
 import '../../models/user_profile.dart';
 import '../auth/login.dart';
@@ -268,7 +269,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Text(
                     user.baseSaHz == null
                         ? 'Not set yet. Find yours so your feedback matches your voice.'
-                        : 'Your Sa is set. You can redo it any time.',
+                        : 'Your Sa is set: ${noteNameForHz(user.baseSaHz!)} (${user.baseSaHz!.toStringAsFixed(1)} Hz). You can redo it any time.',
                     style: TextStyle(
                       fontSize: 14,
                       color: Colors.grey[600],
