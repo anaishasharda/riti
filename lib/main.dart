@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 import 'package:sargam_app/feature/auth/login.dart';
 import 'package:sargam_app/feature/navigation/main_navigation.dart';
@@ -10,6 +11,7 @@ import 'package:sargam_app/services/app_state_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await initializeDateFormatting();
   runApp(const MyApp());
 }
 

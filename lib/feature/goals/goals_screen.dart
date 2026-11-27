@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../models/practice_goal.dart';
 import '../../services/firebase_service.dart';
@@ -496,7 +497,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${selectedDeadline.day}/${selectedDeadline.month}/${selectedDeadline.year}',
+                                DateFormat.yMd().format(selectedDeadline),
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,

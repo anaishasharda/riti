@@ -54,6 +54,7 @@ dependencies:
   flutter_audio_capture:
   # For charts and graphs
   fl_chart:
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:
