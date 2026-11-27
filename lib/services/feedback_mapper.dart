@@ -30,7 +30,8 @@
 //
 // Tunable at §6 validation: [_shiftThresholdCents],
 // [_strongShiftThresholdCents], [_littleTierCents], [_minPointsToJudge],
-// [_wrongNoteNamingBandCents], [_uniformSpreadCents].
+// [_wrongNoteNamingBandCents], [_uniformSpreadCents],
+// [_minPointsToCover].
 import 'sa_pitch.dart';
 
 /// What kind of card this is. F1b renders on it: the shift kind can offer
@@ -100,6 +101,12 @@ const double _wrongNoteNamingBandCents = 35.0;
 /// this band — the take actually moved together. Wrong notes are
 /// excluded from the spread. A starting hypothesis, tunable at §6.
 const double _uniformSpreadCents = 50.0;
+
+/// A swara counts as covered only with at least this many voiced points.
+/// Ghost readings fill a bucket with only a handful of points (8, 11, 12
+/// observed on real takes) while a genuinely sung note carries 23 or
+/// more — a starting hypothesis, tunable at §6.
+const int _minPointsToCover = 15;
 
 /// The twelve chromatic degrees, in semitone order from Sa, with their
 /// swara names. Used only to name a clear raga-rule break (rule 5).
@@ -377,15 +384,18 @@ String _joinNames(List<String> names) {
 /// points (the notSung floor is only max(3, ceil(2% of voiced))), so a
 /// non-line take can come back with a confident in-tune verdict. This
 /// gate counts the line's swaras with status other than notSung and
-/// requires at least half of them (rounded up): for the 5-note Bhopali
-/// line that is 3. An empty diagnosis is not covered (never asserted —
-/// callers check coverage before mapping).
+/// at least [_minPointsToCover] voiced points, and requires at least
+/// half of them (rounded up): for the 5-note Bhopali line that is 3.
+/// An empty diagnosis is not covered (never asserted — callers check
+/// coverage before mapping).
 bool isLineCovered(List<SwaraDiagnosis> diagnosis, RagaSwaraTable table) {
   if (diagnosis.isEmpty) return false;
   final inTable = table.swaras.map((s) => s.name).toSet();
   var covered = 0;
   for (final d in diagnosis) {
-    if (inTable.contains(d.swara) && d.status != SwaraDiagnosis.statusNotSung) {
+    if (inTable.contains(d.swara) &&
+        d.status != SwaraDiagnosis.statusNotSung &&
+        d.pointCount >= _minPointsToCover) {
       covered++;
     }
   }

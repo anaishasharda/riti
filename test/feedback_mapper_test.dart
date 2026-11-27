@@ -537,4 +537,91 @@ void main() {
       expect(c.fix, contains('probably off'));
     });
   });
+
+  group('isLineCovered point-count bar (ghost bar)', () {
+    SwaraDiagnosis d(String swara, double dev, int points, String status) =>
+        SwaraDiagnosis(
+          swara: swara,
+          medianDeviationCents: dev,
+          pointCount: points,
+          status: status,
+        );
+
+    SwaraDiagnosis ns(String swara) =>
+        d(swara, 0.0, 0, SwaraDiagnosis.statusNotSung);
+
+    test(
+      'a: random take (Nov 27): Sa + Ma/Ni, ghost Pa/Dha -> NOT covered',
+      () {
+        // Anaisha's real Nov 27 random take: Sa held + Ma and Ni briefly.
+        // Sa -112 (133 pts, the Ni bucketed into Sa) and Ga +71 (120 pts,
+        // the Ma bucketed into Ga) are truly covered; Pa -23 (11 pts) and
+        // Dha -16 (12 pts) are ghosts she did not sing. Only 2 of 5
+        // covered — the gate must fire.
+        final diagnosis = [
+          d('Sa', -112, 133, SwaraDiagnosis.statusWrongNote),
+          ns('Re'),
+          d('Ga', 71, 120, SwaraDiagnosis.statusSharp),
+          d('Pa', -23, 11, SwaraDiagnosis.statusInTune),
+          d('Dha', -16, 12, SwaraDiagnosis.statusInTune),
+        ];
+        expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
+      },
+    );
+
+    test('b: 14 points does not count, 15 points does (boundary)', () {
+      final fourteen = [
+        d('Sa', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Re', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Ga', 0, 14, SwaraDiagnosis.statusInTune),
+        ns('Pa'),
+        ns('Dha'),
+      ];
+      expect(isLineCovered(fourteen, bhopaliTable), isFalse);
+      final fifteen = [
+        d('Sa', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Re', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Ga', 0, 15, SwaraDiagnosis.statusInTune),
+        ns('Pa'),
+        ns('Dha'),
+      ];
+      expect(isLineCovered(fifteen, bhopaliTable), isTrue);
+    });
+
+    test('c: Nov 27 real takes: smallest genuine count 23 -> covered', () {
+      // Pre-recalibration avroh: Sa -72 (41), Re -77 wrongNote (23),
+      // Ga +23 (28), Pa -59 (30), Dha +69 (57).
+      final before = [
+        d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+        d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+        d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+        d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+        d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+      ];
+      expect(isLineCovered(before, bhopaliTable), isTrue);
+      // Post-recalibration avroh: Sa -33 (89), Re -36 (31), Ga -27 (30),
+      // Pa -47 (29), Dha -29 (31).
+      final after = [
+        d('Sa', -33, 89, SwaraDiagnosis.statusFlat),
+        d('Re', -36, 31, SwaraDiagnosis.statusFlat),
+        d('Ga', -27, 30, SwaraDiagnosis.statusFlat),
+        d('Pa', -47, 29, SwaraDiagnosis.statusFlat),
+        d('Dha', -29, 31, SwaraDiagnosis.statusFlat),
+      ];
+      expect(isLineCovered(after, bhopaliTable), isTrue);
+    });
+
+    test('d: f-case, Sa held + 8 stray frames near Dha -> NOT covered', () {
+      // Same fixture as coverage-group test b: Sa 25 pts counts, Dha 8
+      // stray pts now fall under the bar too. Only 1 of 5 covered.
+      final diagnosis = [
+        d('Sa', 0, 25, SwaraDiagnosis.statusInTune),
+        ns('Re'),
+        ns('Ga'),
+        ns('Pa'),
+        d('Dha', 5, 8, SwaraDiagnosis.statusInTune),
+      ];
+      expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
+    });
+  });
 }
