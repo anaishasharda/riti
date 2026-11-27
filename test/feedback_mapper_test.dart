@@ -405,4 +405,136 @@ void main() {
       expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
     });
   });
+
+  group('shift fires only on uniform takes (spread check)', () {
+    SwaraDiagnosis d(String swara, double dev, int points, String status) =>
+        SwaraDiagnosis(
+          swara: swara,
+          medianDeviationCents: dev,
+          pointCount: points,
+          status: status,
+        );
+
+    // Bhopali in table order, as diagnoseSwara produces it.
+    List<SwaraDiagnosis> take(List<double> devs) {
+      const swaras = ['Sa', 'Re', 'Ga', 'Pa', 'Dha'];
+      return [
+        for (var i = 0; i < 5; i++)
+          d(
+            swaras[i],
+            devs[i],
+            40,
+            devs[i].abs() <= 25
+                ? SwaraDiagnosis.statusInTune
+                : devs[i] < 0
+                ? SwaraDiagnosis.statusFlat
+                : SwaraDiagnosis.statusSharp,
+          ),
+      ];
+    }
+
+    test(
+      'a: post-recalibration take (Nov 27): 20c spread -> shift, gentle',
+      () {
+        // Anaisha's real take after recalibrating to G#: Sa -33 (89),
+        // Re -36 (31), Ga -27 (30), Pa -47 (29), Dha -29 (31).
+        // Median -33c, spread 20c: genuinely uniform, the textbook
+        // shift case.
+        final diagnosis = [
+          d('Sa', -33, 89, SwaraDiagnosis.statusFlat),
+          d('Re', -36, 31, SwaraDiagnosis.statusFlat),
+          d('Ga', -27, 30, SwaraDiagnosis.statusFlat),
+          d('Pa', -47, 29, SwaraDiagnosis.statusFlat),
+          d('Dha', -29, 31, SwaraDiagnosis.statusFlat),
+        ];
+        final c = mapDiagnosisToFeedback(diagnosis, bhopaliTable);
+        expect(c.kind, FeedbackKind.shift);
+        expect(
+          c.fix,
+          'Everything sounds a little low against your saved Sa. Your saved Sa might be a touch off — re-check it from Profile and sing again.',
+        );
+        expect(
+          c.reinforcement,
+          'The shape of your scale was right — every note moved together.',
+        );
+        expect(c.hearTokens, isEmpty);
+      },
+    );
+
+    test(
+      'b: pre-recalibration take (Nov 27): 141c spread -> wrongNote, not shift',
+      () {
+        // Anaisha's real take before recalibration: Sa -72 (41),
+        // Re -77 wrongNote (23), Ga +23 (28), Pa -59 (30), Dha +69 (57).
+        // Median -59c but the tuning spread is 141c, so the shift
+        // branch must not fire; the wrong note (komal Re) is the fix.
+        final diagnosis = [
+          d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+          d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+          d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+          d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+          d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+        ];
+        final c = mapDiagnosisToFeedback(diagnosis, bhopaliTable);
+        expect(c.kind, FeedbackKind.wrongNote);
+        expect(
+          c.fix,
+          'That went up to komal Re — Bhopali doesn\'t use komal Re. Listen (Sa… Re) and sing it again.',
+        );
+        expect(c.reinforcement, 'Ga was right in tune.');
+        expect(c.hearTokens, ['Sa', 'Re']);
+      },
+    );
+
+    test('c: spread exactly 50c -> shift (boundary)', () {
+      final c = mapDiagnosisToFeedback(
+        take([-60, -55, -50, -40, -10]),
+        bhopaliTable,
+      );
+      expect(c.kind, FeedbackKind.shift);
+      expect(c.fix, contains('probably off'));
+    });
+
+    test('d: spread 51c -> falls through to the worst note', () {
+      final c = mapDiagnosisToFeedback(
+        take([-61, -55, -50, -40, -10]),
+        bhopaliTable,
+      );
+      expect(c.kind, FeedbackKind.tuning);
+      expect(c.fix, 'Your Sa was low. Listen (Sa… Sa) and sing it again.');
+      expect(c.reinforcement, 'Dha was right in tune.');
+      expect(c.hearTokens, ['Sa', 'Sa']);
+    });
+
+    test('e: shift plus a wrong note: shift still wins (test 18 fixture)', () {
+      // Same fixture as test 18: the non-wrongNote spread is 0, so
+      // the shift fires and rule 1 still outranks the wrong note.
+      final diagnosis = [
+        d('Sa', -40, 40, SwaraDiagnosis.statusFlat),
+        d('Re', -40, 40, SwaraDiagnosis.statusFlat),
+        d('Ga', 100, 40, SwaraDiagnosis.statusWrongNote),
+        d('Pa', -40, 40, SwaraDiagnosis.statusFlat),
+        d('Dha', -40, 40, SwaraDiagnosis.statusFlat),
+      ];
+      final c = mapDiagnosisToFeedback(diagnosis, bhopaliTable);
+      expect(c.kind, FeedbackKind.shift);
+      expect(c.reinforcement, isNotNull);
+      expect(c.reinforcement, isNot(contains('shape of your scale')));
+    });
+
+    test('f: all notes wrong notes -> shift (no tuning spread)', () {
+      // No non-wrongNote deviations exist, so the spread is 0 and the
+      // old behaviour is preserved: the median (+100c) fires the shift.
+      final diagnosis = [
+        d('Sa', 100, 40, SwaraDiagnosis.statusWrongNote),
+        d('Re', 100, 40, SwaraDiagnosis.statusWrongNote),
+        d('Ga', 100, 40, SwaraDiagnosis.statusWrongNote),
+        d('Pa', 100, 40, SwaraDiagnosis.statusWrongNote),
+        d('Dha', 100, 40, SwaraDiagnosis.statusWrongNote),
+      ];
+      final c = mapDiagnosisToFeedback(diagnosis, bhopaliTable);
+      expect(c.kind, FeedbackKind.shift);
+      expect(c.fix, contains('probably off'));
+    });
+  });
 }

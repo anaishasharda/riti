@@ -10,6 +10,9 @@
 //     errors. The app never plays a drone during recording, so the message
 //     is always framed against the saved Sa, which is named as possibly
 //     wrong. Strength scales: gentle up to 40c, stronger beyond it.
+//     The shift fires only when the tuning deviations fit inside one
+//     in-tune band (50c); a tuning outlier hidden behind a shift falls
+//     through to the per-note fix.
 //  2. Priority: shift, then wrong note, then low/high, then length.
 //     A note too short to judge gets "hold that note longer", never a
 //     tuning verdict — even when it would otherwise be the fix.
@@ -27,7 +30,7 @@
 //
 // Tunable at §6 validation: [_shiftThresholdCents],
 // [_strongShiftThresholdCents], [_littleTierCents], [_minPointsToJudge],
-// [_wrongNoteNamingBandCents].
+// [_wrongNoteNamingBandCents], [_uniformSpreadCents].
 import 'sa_pitch.dart';
 
 /// What kind of card this is. F1b renders on it: the shift kind can offer
@@ -93,6 +96,11 @@ const int _minPointsToJudge = 8;
 /// degree outside the raga.
 const double _wrongNoteNamingBandCents = 35.0;
 
+/// The shift message fires only when the tuning deviations fit inside
+/// this band — the take actually moved together. Wrong notes are
+/// excluded from the spread. A starting hypothesis, tunable at §6.
+const double _uniformSpreadCents = 50.0;
+
 /// The twelve chromatic degrees, in semitone order from Sa, with their
 /// swara names. Used only to name a clear raga-rule break (rule 5).
 const List<String> _chromaticSwaraNames = [
@@ -127,11 +135,25 @@ FeedbackCardContent mapDiagnosisToFeedback(
 
   // 1. Uniform shift (rule 1): the median of the sung deviations. notSung
   // is excluded — its 0.0 deviation is a placeholder, not a measurement.
+  // The shift fires only when the take actually moved together: the
+  // spread of the tuning deviations must fit inside one in-tune band.
+  // Wrong notes are excluded from the spread — a wrong note is a
+  // different note, not a displaced one, and rule 1 still lets shift
+  // outrank a wrong note (test 18). With no tuning deviations at all
+  // the spread is 0, preserving the old behaviour for that edge case.
   if (sung.isNotEmpty) {
     final shift = _median(
       sung.map((d) => d.medianDeviationCents).toList(),
     );
-    if (shift.abs() >= _shiftThresholdCents) {
+    final tuningDevs = sung
+        .where((d) => d.status != SwaraDiagnosis.statusWrongNote)
+        .map((d) => d.medianDeviationCents)
+        .toList();
+    final spread = tuningDevs.isEmpty
+        ? 0.0
+        : tuningDevs.reduce((a, b) => a > b ? a : b) -
+              tuningDevs.reduce((a, b) => a < b ? a : b);
+    if (shift.abs() >= _shiftThresholdCents && spread <= _uniformSpreadCents) {
       final direction = shift > 0 ? 'high' : 'low';
       final strong = shift.abs() > _strongShiftThresholdCents;
       final fix = strong
