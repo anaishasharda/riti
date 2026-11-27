@@ -731,7 +731,11 @@ class _PracticeScreenState extends State<PracticeScreen>
     final table = RagaSwaraTable.forRaga(widget.ragaData.name);
     final diagnosis = _lastFeedback!.swaraDiagnosis;
     if (table != null && diagnosis.isNotEmpty) {
-      if (!isLineCovered(diagnosis, table)) return _buildCoverageCard();
+      if (!isLineCovered(diagnosis, table)) {
+        final foreign = foreignNoteNames(diagnosis, table);
+        if (foreign.isNotEmpty) return _buildNotBhopaliCard(foreign);
+        return _buildCoverageCard();
+      }
       return _buildMapperFeedbackCard(mapDiagnosisToFeedback(diagnosis, table));
     }
 
@@ -993,6 +997,57 @@ class _PracticeScreenState extends State<PracticeScreen>
           const Text(
             'I could only hear part of the line. Sing it once through, then tap Analyze again.',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap Record to try again.',
+            style: TextStyle(color: Colors.grey[700], fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Not-Bhopali card (first cut): the take did not cover the line
+  /// AND it holds notes that are not in the raga — so the first thing
+  /// the student hears is that they did not sing Bhopali at all, not a
+  /// tuning verdict on notes they did not sing. Same shape as
+  /// [_buildCoverageCard]: one plain-language reason plus the one action
+  /// (record again). No Listen button, no Re-check Sa button, no scores.
+  /// At most the two most-sung foreign notes are named; the card stays
+  /// short (one fix = one action). Copy is draft — Anaisha and her
+  /// teacher can reword it; the detection is the hard part.
+  Widget _buildNotBhopaliCard(List<String> foreignNames) {
+    final shown = foreignNames.take(2).toList();
+    final names = shown.length == 1
+        ? shown.first
+        : '${shown[0]} and ${shown[1]}';
+    final pronoun = shown.length == 1 ? 'it' : 'those';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.music_note, color: Colors.deepPurpleAccent, size: 24),
+              const SizedBox(width: 8),
+              const Text(
+                'How that take went',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'That wasn\'t the Bhopali line — I heard $names — Bhopali doesn\'t use $pronoun. Sing the line once through, then tap Analyze again.',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(

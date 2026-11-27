@@ -624,4 +624,135 @@ void main() {
       expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
     });
   });
+
+  group('isLineCovered identity check (first cut: foreign notes)', () {
+    SwaraDiagnosis d(String swara, double dev, int points, String status) =>
+        SwaraDiagnosis(
+          swara: swara,
+          medianDeviationCents: dev,
+          pointCount: points,
+          status: status,
+        );
+
+    SwaraDiagnosis ns(String swara) =>
+        d(swara, 0.0, 0, SwaraDiagnosis.statusNotSung);
+
+    test('a: real takes R1/R2/R3 -> covered', () {
+      // R1: pre-recalibration avroh, Sa -72 (41), Re -77 wrongNote (23),
+      // Ga +23 (28), Pa -59 (30), Dha +69 (57). Shift -59c: after
+      // correction Ga reads as Ma and Dha as komal Ni, so it passes by
+      // exactly one bucket (Sa, Re, Pa).
+      final r1 = [
+        d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+        d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+        d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+        d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+        d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+      ];
+      expect(isLineCovered(r1, bhopaliTable), isTrue);
+      // R2: post-recalibration avroh, Sa -33 (89), Re -36 (31),
+      // Ga -27 (30), Pa -47 (29), Dha -29 (31).
+      final r2 = [
+        d('Sa', -33, 89, SwaraDiagnosis.statusFlat),
+        d('Re', -36, 31, SwaraDiagnosis.statusFlat),
+        d('Ga', -27, 30, SwaraDiagnosis.statusFlat),
+        d('Pa', -47, 29, SwaraDiagnosis.statusFlat),
+        d('Dha', -29, 31, SwaraDiagnosis.statusFlat),
+      ];
+      expect(isLineCovered(r2, bhopaliTable), isTrue);
+      // R3: control in-tune avroh, Sa -8 (107), Re +1 (51), Ga -24 (42),
+      // Pa -35 (39), Dha -16 (41).
+      final r3 = [
+        d('Sa', -8, 107, SwaraDiagnosis.statusInTune),
+        d('Re', 1, 51, SwaraDiagnosis.statusInTune),
+        d('Ga', -24, 42, SwaraDiagnosis.statusInTune),
+        d('Pa', -35, 39, SwaraDiagnosis.statusFlat),
+        d('Dha', -16, 41, SwaraDiagnosis.statusInTune),
+      ];
+      expect(isLineCovered(r3, bhopaliTable), isTrue);
+    });
+
+    test('b: random takes X1/X2 and f-case F -> NOT covered', () {
+      // X1: Sa held + Ma, Ni briefly. Sa -112 (133, the Ni bucketed
+      // into Sa), Ga +71 (120, the Ma bucketed into Ga), Pa -23 (11)
+      // and Dha -16 (12) ghosts. No bucket's pitch is really a line
+      // note: 0 of 5 covered.
+      final x1 = [
+        d('Sa', -112, 133, SwaraDiagnosis.statusWrongNote),
+        ns('Re'),
+        d('Ga', 71, 120, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 11, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 12, SwaraDiagnosis.statusInTune),
+      ];
+      expect(isLineCovered(x1, bhopaliTable), isFalse);
+      // X2: Sa, Ni, Pa, Ma only. Sa -63 (140), Ga +71 (101),
+      // Pa -23 (74), Dha +98 (25). Only Ga and Pa are really line
+      // notes: 2 of 5 covered.
+      final x2 = [
+        d('Sa', -63, 140, SwaraDiagnosis.statusFlat),
+        ns('Re'),
+        d('Ga', 71, 101, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 74, SwaraDiagnosis.statusInTune),
+        d('Dha', 98, 25, SwaraDiagnosis.statusWrongNote),
+      ];
+      expect(isLineCovered(x2, bhopaliTable), isFalse);
+      // F: harness f-case, Sa 25 pts + Dha 8 stray pts.
+      final f = [
+        d('Sa', 0, 25, SwaraDiagnosis.statusInTune),
+        ns('Re'),
+        ns('Ga'),
+        ns('Pa'),
+        d('Dha', 5, 8, SwaraDiagnosis.statusInTune),
+      ];
+      expect(isLineCovered(f, bhopaliTable), isFalse);
+    });
+
+    test('c: X1 foreign notes are Ni and Ma, most-sung first', () {
+      final x1 = [
+        d('Sa', -112, 133, SwaraDiagnosis.statusWrongNote),
+        ns('Re'),
+        d('Ga', 71, 120, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 11, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 12, SwaraDiagnosis.statusInTune),
+      ];
+      expect(foreignNoteNames(x1, bhopaliTable), ['Ni', 'Ma']);
+    });
+
+    test('d: X2 foreign notes are Ni and komal Ni', () {
+      final x2 = [
+        d('Sa', -63, 140, SwaraDiagnosis.statusFlat),
+        ns('Re'),
+        d('Ga', 71, 101, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 74, SwaraDiagnosis.statusInTune),
+        d('Dha', 98, 25, SwaraDiagnosis.statusWrongNote),
+      ];
+      expect(foreignNoteNames(x2, bhopaliTable), ['Ni', 'komal Ni']);
+    });
+
+    test('e: f-case has no foreign notes', () {
+      final f = [
+        d('Sa', 0, 25, SwaraDiagnosis.statusInTune),
+        ns('Re'),
+        ns('Ga'),
+        ns('Pa'),
+        d('Dha', 5, 8, SwaraDiagnosis.statusInTune),
+      ];
+      expect(foreignNoteNames(f, bhopaliTable), isEmpty);
+    });
+
+    test('f: R1 foreign notes are komal Ni and Ma (informational)', () {
+      // R1 passes the gate (3 of 5 covered), but two of its buckets
+      // read as foreign notes after shift correction — Ga as Ma (28
+      // pts) and Dha as komal Ni (57 pts). This locks the
+      // classification: the gate and the helper agree.
+      final r1 = [
+        d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+        d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+        d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+        d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+        d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+      ];
+      expect(foreignNoteNames(r1, bhopaliTable), ['komal Ni', 'Ma']);
+    });
+  });
 }

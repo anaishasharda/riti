@@ -377,27 +377,122 @@ String _joinNames(List<String> names) {
   return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 }
 
+/// The shift-corrected identity of one diagnosis bucket: which
+/// chromatic degree its pitch actually lands nearest, after removing
+/// the take's overall shift. Shared by [isLineCovered] and
+/// [foreignNoteNames] so the two never disagree about whether a bucket
+/// is really its swara: a bucket whose pitch lands nearest a degree
+/// outside the raga is a different note, not the line swara it was
+/// bucketed as. (A wrong note sung properly fills a line bucket with
+/// as many points as the right note — Ma sung fills Ga's bucket with
+/// 101 points — so no point count can tell them apart; only the pitch
+/// can.)
+class _BucketIdentity {
+  final SwaraDiagnosis diagnosis;
+
+  /// Index into [_chromaticSwaraNames] (0..11) of the nearest degree,
+  /// or null when the swara has no centre in the table.
+  final int? nearestDegreeIndex;
+
+  const _BucketIdentity(this.diagnosis, this.nearestDegreeIndex);
+}
+
+/// Classify every bucket of a take by its shift-corrected pitch.
+/// The shift is the median of the sung deviations (the mapper's shift
+/// definition; 0.0 when nothing was sung), so a uniformly shifted take
+/// is judged against its own level, not against absolute Sa. The
+/// nearest-degree loop is the [_ruleBreakName] shape: octave-wrap
+/// distance, strict `<` in ascending order, ties to the lowest degree.
+List<_BucketIdentity> _bucketIdentities(
+  List<SwaraDiagnosis> diagnosis,
+  RagaSwaraTable table,
+) {
+  final sung = diagnosis
+      .where((d) => d.status != SwaraDiagnosis.statusNotSung)
+      .toList();
+  final shift = sung.isEmpty
+      ? 0.0
+      : _median(sung.map((d) => d.medianDeviationCents).toList());
+  return diagnosis.map((d) {
+    final center = _centerOrNull(table, d.swara);
+    if (center == null) return _BucketIdentity(d, null);
+    final absolute =
+        ((center + (d.medianDeviationCents - shift)) % 1200 + 1200) % 1200;
+    var bestIndex = 0;
+    var bestDist = double.infinity;
+    for (var i = 0; i < 12; i++) {
+      final degreeCents = i * 100.0;
+      var dist = (absolute - degreeCents).abs();
+      if (dist > 600) dist = 1200 - dist;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIndex = i;
+      }
+    }
+    return _BucketIdentity(d, bestIndex);
+  }).toList();
+}
+
 /// Line-coverage check (f-gap fix): did the take actually cover the
-/// line's swaras with enough points each to count as sung?
+/// line's swaras?
 ///
 /// A take of stray frames can leave a swara "sung" on a handful of
 /// points (the notSung floor is only max(3, ceil(2% of voiced))), so a
-/// non-line take can come back with a confident in-tune verdict. This
-/// gate counts the line's swaras with status other than notSung and
-/// at least [_minPointsToCover] voiced points, and requires at least
-/// half of them (rounded up): for the 5-note Bhopali line that is 3.
-/// An empty diagnosis is not covered (never asserted — callers check
-/// coverage before mapping).
+/// non-line take can come back with a confident in-tune verdict. And a
+/// wrong note sung properly fills a line bucket with as many points as
+/// the right note — no point count can tell them apart. So a swara
+/// counts only when its pitch, after removing the take's overall
+/// shift, lands nearest one of the raga's own degrees: a bucket whose
+/// pitch is really a different note does not count, however many
+/// points it holds. Requires at least half the line's swaras (rounded
+/// up): for the 5-note Bhopali line that is 3. An empty diagnosis is
+/// not covered (never asserted — callers check coverage before mapping).
 bool isLineCovered(List<SwaraDiagnosis> diagnosis, RagaSwaraTable table) {
   if (diagnosis.isEmpty) return false;
   final inTable = table.swaras.map((s) => s.name).toSet();
+  final inRagaDegrees = table.swaras.map((s) => s.cents).toSet();
   var covered = 0;
-  for (final d in diagnosis) {
+  for (final identity in _bucketIdentities(diagnosis, table)) {
+    final d = identity.diagnosis;
+    final degree = identity.nearestDegreeIndex;
     if (inTable.contains(d.swara) &&
         d.status != SwaraDiagnosis.statusNotSung &&
-        d.pointCount >= _minPointsToCover) {
+        d.pointCount >= _minPointsToCover &&
+        degree != null &&
+        inRagaDegrees.contains(degree * 100.0)) {
       covered++;
     }
   }
   return covered >= (table.swaras.length + 1) ~/ 2;
+}
+
+/// The foreign notes in a take, by name: buckets whose shift-corrected
+/// pitch lands nearest a degree outside the raga, with enough points
+/// to count. Ordered by pointCount descending (the most-sung foreign
+/// note first), deduplicated — two buckets landing on the same degree
+/// name it once. Empty when the take holds no substantial foreign
+/// note. Uses the same classification as [isLineCovered], so the two
+/// never disagree about whether a bucket is really its swara. A
+/// notSung bucket holds no measured pitch (its 0.0 deviation is a
+/// placeholder), so it can never be foreign.
+List<String> foreignNoteNames(
+  List<SwaraDiagnosis> diagnosis,
+  RagaSwaraTable table,
+) {
+  final inRagaDegrees = table.swaras.map((s) => s.cents).toSet();
+  final byName = <String, int>{};
+  for (final identity in _bucketIdentities(diagnosis, table)) {
+    final d = identity.diagnosis;
+    final degree = identity.nearestDegreeIndex;
+    if (d.status == SwaraDiagnosis.statusNotSung) continue;
+    if (d.pointCount < _minPointsToCover) continue;
+    if (degree == null) continue;
+    if (inRagaDegrees.contains(degree * 100.0)) continue;
+    final name = _chromaticSwaraNames[degree];
+    final held = byName[name];
+    if (held == null || d.pointCount > held) byName[name] = d.pointCount;
+  }
+  final ranked = byName.entries.toList()
+    ..sort((a, b) => b.value.compareTo(a.value));
+  return ranked.map((e) => e.key).toList();
 }
