@@ -329,4 +329,80 @@ void main() {
       }
     });
   });
+
+  group('isLineCovered (coverage gate)', () {
+    SwaraDiagnosis d(String swara, double dev, int points, String status) =>
+        SwaraDiagnosis(
+          swara: swara,
+          medianDeviationCents: dev,
+          pointCount: points,
+          status: status,
+        );
+
+    SwaraDiagnosis ns(String swara) =>
+        d(swara, 0.0, 0, SwaraDiagnosis.statusNotSung);
+
+    test(
+      'a: today\'s sung take (Nov 27): all 5 sung, 23-57 pts -> covered',
+      () {
+        // Anaisha's real Nov 27 avroh: Sa -72 (41), Re -77 wrongNote (23),
+        // Ga +23 (28), Pa -59 (30), Dha +69 (57). Median -59c: the mapper
+        // correctly shows the shift card — and the take covered the line.
+        final diagnosis = [
+          d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+          d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+          d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+          d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+          d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+        ];
+        expect(isLineCovered(diagnosis, bhopaliTable), isTrue);
+      },
+    );
+
+    test('b: f-case, Sa held + 8 stray frames near Dha -> NOT covered', () {
+      // The Nov 25 finding: Sa + 8 stray frames near Dha made Dha
+      // "sung" (8 pts clears the notSung floor of 3) and the card praised
+      // "Sa and Dha were right in tune". Only 2 of 5 covered: the gate
+      // must fire instead of a tuning verdict.
+      final diagnosis = [
+        d('Sa', 0, 25, SwaraDiagnosis.statusInTune),
+        ns('Re'),
+        ns('Ga'),
+        ns('Pa'),
+        d('Dha', 5, 8, SwaraDiagnosis.statusInTune),
+      ];
+      expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
+    });
+
+    test('c: exactly 3 of 5 covered -> covered (boundary)', () {
+      final diagnosis = [
+        d('Sa', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Re', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Ga', 0, 40, SwaraDiagnosis.statusInTune),
+        ns('Pa'),
+        ns('Dha'),
+      ];
+      expect(isLineCovered(diagnosis, bhopaliTable), isTrue);
+    });
+
+    test('d: exactly 2 of 5 covered -> NOT covered (boundary)', () {
+      final diagnosis = [
+        d('Sa', 0, 40, SwaraDiagnosis.statusInTune),
+        d('Re', 0, 40, SwaraDiagnosis.statusInTune),
+        ns('Ga'),
+        ns('Pa'),
+        ns('Dha'),
+      ];
+      expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
+    });
+
+    test('e: empty diagnosis -> NOT covered', () {
+      expect(isLineCovered([], bhopaliTable), isFalse);
+    });
+
+    test('f: all notSung -> NOT covered', () {
+      final diagnosis = [ns('Sa'), ns('Re'), ns('Ga'), ns('Pa'), ns('Dha')];
+      expect(isLineCovered(diagnosis, bhopaliTable), isFalse);
+    });
+  });
 }

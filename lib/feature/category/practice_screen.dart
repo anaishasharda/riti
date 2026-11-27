@@ -731,6 +731,7 @@ class _PracticeScreenState extends State<PracticeScreen>
     final table = RagaSwaraTable.forRaga(widget.ragaData.name);
     final diagnosis = _lastFeedback!.swaraDiagnosis;
     if (table != null && diagnosis.isNotEmpty) {
+      if (!isLineCovered(diagnosis, table)) return _buildCoverageCard();
       return _buildMapperFeedbackCard(mapDiagnosisToFeedback(diagnosis, table));
     }
 
@@ -957,6 +958,47 @@ class _PracticeScreenState extends State<PracticeScreen>
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// Coverage card (f-gap fix): the take did not cover enough of the
+  /// line's swaras to judge it — one plain-language reason plus the one
+  /// action (record again). No Listen button, no Re-check Sa button, no
+  /// scores: a non-line take must not get a tuning verdict or praise.
+  Widget _buildCoverageCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.music_note, color: Colors.deepPurpleAccent, size: 24),
+              const SizedBox(width: 8),
+              const Text(
+                'How that take went',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'I could only hear part of the line. Sing it once through, then tap Analyze again.',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap Record to try again.',
+            style: TextStyle(color: Colors.grey[700], fontSize: 14),
+          ),
         ],
       ),
     );

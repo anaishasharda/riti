@@ -347,3 +347,25 @@ String _joinNames(List<String> names) {
   if (names.length == 2) return '${names[0]} and ${names[1]}';
   return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 }
+
+/// Line-coverage check (f-gap fix): did the take actually cover the
+/// line's swaras with enough points each to count as sung?
+///
+/// A take of stray frames can leave a swara "sung" on a handful of
+/// points (the notSung floor is only max(3, ceil(2% of voiced))), so a
+/// non-line take can come back with a confident in-tune verdict. This
+/// gate counts the line's swaras with status other than notSung and
+/// requires at least half of them (rounded up): for the 5-note Bhopali
+/// line that is 3. An empty diagnosis is not covered (never asserted —
+/// callers check coverage before mapping).
+bool isLineCovered(List<SwaraDiagnosis> diagnosis, RagaSwaraTable table) {
+  if (diagnosis.isEmpty) return false;
+  final inTable = table.swaras.map((s) => s.name).toSet();
+  var covered = 0;
+  for (final d in diagnosis) {
+    if (inTable.contains(d.swara) && d.status != SwaraDiagnosis.statusNotSung) {
+      covered++;
+    }
+  }
+  return covered >= (table.swaras.length + 1) ~/ 2;
+}
