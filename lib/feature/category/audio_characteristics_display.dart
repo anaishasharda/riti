@@ -30,6 +30,11 @@ class _AudioCharacteristicsDisplayState
   late Animation<double> _chartAnimation;
   int _selectedTab = 0;
 
+  // Hidden before the pilot: the Detected Notes tile shows raw detector
+  // output (subharmonic ghosts included) and has misled students; the
+  // feedback card is the verdict. Flip to true to restore the tile.
+  static const bool _showDetectedNotesTile = false;
+
   @override
   void initState() {
     super.initState();
@@ -241,7 +246,7 @@ class _AudioCharacteristicsDisplayState
           ),
 
           // Notes section
-          if (characteristics.notes.isNotEmpty) ...[
+          if (_showDetectedNotesTile && characteristics.notes.isNotEmpty) ...[
             const SizedBox(height: 16),
             _buildNotesSection(characteristics.notes),
           ],
