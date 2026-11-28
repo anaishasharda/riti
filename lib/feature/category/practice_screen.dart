@@ -731,11 +731,18 @@ class _PracticeScreenState extends State<PracticeScreen>
     final table = RagaSwaraTable.forRaga(widget.ragaData.name);
     final diagnosis = _lastFeedback!.swaraDiagnosis;
     if (table != null && diagnosis.isNotEmpty) {
-      if (!isLineCovered(diagnosis, table)) {
-        final foreign = foreignNoteNames(diagnosis, table);
-        if (foreign.isNotEmpty) return _buildNotBhopaliCard(foreign);
-        return _buildCoverageCard();
+      // Decoupled foreign-note check: a foreign note is named even
+      // when the line is covered — unless the take is a genuine line
+      // (all five notes sung with real points AND covered), which
+      // still gets the mapper card (R1 reads two foreign buckets but
+      // IS the line).
+      final covered = isLineCovered(diagnosis, table);
+      final foreign = foreignNoteNames(diagnosis, table);
+      if (foreign.isNotEmpty &&
+          !(covered && allLineNotesSung(diagnosis, table))) {
+        return _buildNotBhopaliCard(foreign);
       }
+      if (!covered) return _buildCoverageCard();
       return _buildMapperFeedbackCard(mapDiagnosisToFeedback(diagnosis, table));
     }
 

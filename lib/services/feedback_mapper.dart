@@ -466,6 +466,27 @@ bool isLineCovered(List<SwaraDiagnosis> diagnosis, RagaSwaraTable table) {
   return covered >= (table.swaras.length + 1) ~/ 2;
 }
 
+/// Did the take sing every swara of the line, with enough points to
+/// count? Unlike [isLineCovered], this does not ask whether each bucket
+/// is really its swara — only whether it was sung at all, for at least
+/// [_minPointsToCover] points. A table swara with no diagnosis entry
+/// counts as not sung. Used with [isLineCovered] by the screen: a
+/// genuine take has all five notes present with real points AND passes
+/// coverage, so it still gets the mapper card even when some of its
+/// buckets read as foreign notes (R1: Ga as Ma, Dha as komal Ni).
+bool allLineNotesSung(List<SwaraDiagnosis> diagnosis, RagaSwaraTable table) {
+  for (final swara in table.swaras) {
+    final sung = diagnosis.any(
+      (d) =>
+          d.swara == swara.name &&
+          d.status != SwaraDiagnosis.statusNotSung &&
+          d.pointCount >= _minPointsToCover,
+    );
+    if (!sung) return false;
+  }
+  return true;
+}
+
 /// The foreign notes in a take, by name: buckets whose shift-corrected
 /// pitch lands nearest a degree outside the raga, with enough points
 /// to count. Ordered by pointCount descending (the most-sung foreign

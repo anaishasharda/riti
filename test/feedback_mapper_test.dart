@@ -755,4 +755,170 @@ void main() {
       expect(foreignNoteNames(r1, bhopaliTable), ['komal Ni', 'Ma']);
     });
   });
+
+  group('allLineNotesSung + foreign-note decoupling', () {
+    SwaraDiagnosis d(String swara, double dev, int points, String status) =>
+        SwaraDiagnosis(
+          swara: swara,
+          medianDeviationCents: dev,
+          pointCount: points,
+          status: status,
+        );
+
+    SwaraDiagnosis ns(String swara) =>
+        d(swara, 0.0, 0, SwaraDiagnosis.statusNotSung);
+
+    // Mirrors the branching in _buildFeedbackCard
+    // (practice_screen.dart): the screen itself cannot run in this
+    // harness, so the decision is asserted here from the same three
+    // inputs the screen computes — covered, foreign, allLineNotesSung.
+    String cardFor(List<SwaraDiagnosis> diagnosis) {
+      final covered = isLineCovered(diagnosis, bhopaliTable);
+      final foreign = foreignNoteNames(diagnosis, bhopaliTable);
+      if (foreign.isNotEmpty &&
+          !(covered && allLineNotesSung(diagnosis, bhopaliTable))) {
+        return 'notBhopali';
+      }
+      if (!covered) return 'coverage';
+      return 'mapper';
+    }
+
+    test('a: Take 1 (Sa Ni Pa Ma) -> not-Bhopali card naming Ma', () {
+      // Vishal's first phone take, Nov 28: Sa -65 (86), Re -36 (11),
+      // Ga +65 (85), Pa -23 (63), Dha -29 (59). The Ma he sang is
+      // detected (Ga's bucket reads as Ma, 85 pts) and the gate passes
+      // at 3 of 5 — before the decoupling the card said "Ga was high".
+      final take1 = [
+        d('Sa', -65, 86, SwaraDiagnosis.statusFlat),
+        d('Re', -36, 11, SwaraDiagnosis.statusFlat),
+        d('Ga', 65, 85, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 63, SwaraDiagnosis.statusInTune),
+        d('Dha', -29, 59, SwaraDiagnosis.statusFlat),
+      ];
+      expect(foreignNoteNames(take1, bhopaliTable), ['Ma']);
+      expect(isLineCovered(take1, bhopaliTable), isTrue);
+      expect(allLineNotesSung(take1, bhopaliTable), isFalse);
+      expect(cardFor(take1), 'notBhopali');
+    });
+
+    test('b: Take 2 (Sa Ni Pa Ma, Ni stronger) -> not-Bhopali naming Ni', () {
+      // Vishal's retry, Nov 28: Sa -108 wrongNote (157), Re notSung,
+      // Ga +71 (111), Pa -10 (71), Dha +69 (26). The mapper alone
+      // would name Ni (Sa past the 75c wrong-note line), but Re was
+      // never sung, so the whole-line message is the right card.
+      final take2 = [
+        d('Sa', -108, 157, SwaraDiagnosis.statusWrongNote),
+        ns('Re'),
+        d('Ga', 71, 111, SwaraDiagnosis.statusSharp),
+        d('Pa', -10, 71, SwaraDiagnosis.statusInTune),
+        d('Dha', 69, 26, SwaraDiagnosis.statusSharp),
+      ];
+      expect(foreignNoteNames(take2, bhopaliTable), ['Ni']);
+      expect(isLineCovered(take2, bhopaliTable), isTrue);
+      expect(allLineNotesSung(take2, bhopaliTable), isFalse);
+      expect(cardFor(take2), 'notBhopali');
+    });
+
+    test('c: R1 genuine avroh still gets the mapper card', () {
+      // Regression guard: R1 reads two foreign buckets (Ga as Ma, Dha
+      // as komal Ni) but IS the line — all five notes sung with real
+      // points and covered — so it must NOT get the not-Bhopali card.
+      final r1 = [
+        d('Sa', -72, 41, SwaraDiagnosis.statusFlat),
+        d('Re', -77, 23, SwaraDiagnosis.statusWrongNote),
+        d('Ga', 23, 28, SwaraDiagnosis.statusInTune),
+        d('Pa', -59, 30, SwaraDiagnosis.statusFlat),
+        d('Dha', 69, 57, SwaraDiagnosis.statusSharp),
+      ];
+      expect(foreignNoteNames(r1, bhopaliTable), ['komal Ni', 'Ma']);
+      expect(isLineCovered(r1, bhopaliTable), isTrue);
+      expect(allLineNotesSung(r1, bhopaliTable), isTrue);
+      expect(cardFor(r1), 'mapper');
+    });
+
+    test('d: X1 (Sa held + brief Ma/Ni) -> not-Bhopali card', () {
+      final x1 = [
+        d('Sa', -112, 133, SwaraDiagnosis.statusWrongNote),
+        ns('Re'),
+        d('Ga', 71, 120, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 11, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 12, SwaraDiagnosis.statusInTune),
+      ];
+      expect(foreignNoteNames(x1, bhopaliTable), ['Ni', 'Ma']);
+      expect(isLineCovered(x1, bhopaliTable), isFalse);
+      expect(allLineNotesSung(x1, bhopaliTable), isFalse);
+      expect(cardFor(x1), 'notBhopali');
+    });
+
+    test('e: X2 (Sa, Ni, Pa, Ma) -> not-Bhopali card', () {
+      final x2 = [
+        d('Sa', -63, 140, SwaraDiagnosis.statusFlat),
+        ns('Re'),
+        d('Ga', 71, 101, SwaraDiagnosis.statusSharp),
+        d('Pa', -23, 74, SwaraDiagnosis.statusInTune),
+        d('Dha', 98, 25, SwaraDiagnosis.statusWrongNote),
+      ];
+      expect(foreignNoteNames(x2, bhopaliTable), ['Ni', 'komal Ni']);
+      expect(isLineCovered(x2, bhopaliTable), isFalse);
+      expect(allLineNotesSung(x2, bhopaliTable), isFalse);
+      expect(cardFor(x2), 'notBhopali');
+    });
+
+    test('f: stray-frames take -> coverage card, not not-Bhopali', () {
+      final f = [
+        d('Sa', 0, 25, SwaraDiagnosis.statusInTune),
+        ns('Re'),
+        ns('Ga'),
+        ns('Pa'),
+        d('Dha', 5, 8, SwaraDiagnosis.statusInTune),
+      ];
+      expect(foreignNoteNames(f, bhopaliTable), isEmpty);
+      expect(isLineCovered(f, bhopaliTable), isFalse);
+      expect(allLineNotesSung(f, bhopaliTable), isFalse);
+      expect(cardFor(f), 'coverage');
+    });
+
+    test('g: clean in-tune avroh -> mapper card', () {
+      final clean = [
+        d('Sa', -8, 107, SwaraDiagnosis.statusInTune),
+        d('Re', 1, 51, SwaraDiagnosis.statusInTune),
+        d('Ga', -24, 42, SwaraDiagnosis.statusInTune),
+        d('Pa', -10, 39, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 41, SwaraDiagnosis.statusInTune),
+      ];
+      expect(foreignNoteNames(clean, bhopaliTable), isEmpty);
+      expect(isLineCovered(clean, bhopaliTable), isTrue);
+      expect(allLineNotesSung(clean, bhopaliTable), isTrue);
+      expect(cardFor(clean), 'mapper');
+    });
+
+    test('h: a table swara with no entry at all -> not all sung', () {
+      final missing = [
+        d('Sa', -8, 107, SwaraDiagnosis.statusInTune),
+        d('Re', 1, 51, SwaraDiagnosis.statusInTune),
+        d('Ga', -24, 42, SwaraDiagnosis.statusInTune),
+        d('Pa', -10, 39, SwaraDiagnosis.statusInTune),
+      ];
+      expect(allLineNotesSung(missing, bhopaliTable), isFalse);
+    });
+
+    test('i: 15-point boundary — 15 counts as sung, 14 does not', () {
+      final atBar = [
+        d('Sa', -8, 107, SwaraDiagnosis.statusInTune),
+        d('Re', 1, 51, SwaraDiagnosis.statusInTune),
+        d('Ga', -24, 42, SwaraDiagnosis.statusInTune),
+        d('Pa', -10, 39, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 15, SwaraDiagnosis.statusInTune),
+      ];
+      final underBar = [
+        d('Sa', -8, 107, SwaraDiagnosis.statusInTune),
+        d('Re', 1, 51, SwaraDiagnosis.statusInTune),
+        d('Ga', -24, 42, SwaraDiagnosis.statusInTune),
+        d('Pa', -10, 39, SwaraDiagnosis.statusInTune),
+        d('Dha', -16, 14, SwaraDiagnosis.statusInTune),
+      ];
+      expect(allLineNotesSung(atBar, bhopaliTable), isTrue);
+      expect(allLineNotesSung(underBar, bhopaliTable), isFalse);
+    });
+  });
 }
